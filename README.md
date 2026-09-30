@@ -35,6 +35,12 @@ print(des3_cbc_decrypt(token, key, iv))            # -> hello world
 另提供字节接口 `des3_cbc_encrypt_bytes` / `des3_cbc_decrypt_bytes`，以及单分组原语
 `des_encrypt_block` / `des_decrypt_block` / `des3_encrypt_block` / `des3_decrypt_block`。
 
+可直接运行的示例见 [`examples/roundtrip.py`](examples/roundtrip.py)：
+
+```bash
+python examples/roundtrip.py
+```
+
 ## 测试
 
 ```bash
