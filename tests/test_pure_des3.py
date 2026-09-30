@@ -239,6 +239,13 @@ class TestValidation(unittest.TestCase):
         with self.assertRaises(TypeError):
             pure_des3.des3_cbc_encrypt(b"bytes not str", self.KEY, self.IV)
 
+    def test_decrypt_rejects_bytes(self):
+        """与 encrypt 对称：文本接口只收 str，字节密文走 _bytes 变体。"""
+        cipher = pure_des3.des3_cbc_encrypt("hello", self.KEY, self.IV)
+        with self.assertRaises(TypeError) as ctx:
+            pure_des3.des3_cbc_decrypt(cipher.encode("ascii"), self.KEY, self.IV)
+        self.assertIn("des3_cbc_decrypt_bytes", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

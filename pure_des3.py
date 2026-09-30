@@ -319,6 +319,12 @@ def des3_cbc_encrypt(plaintext, key24, iv8):
 
 
 def des3_cbc_decrypt(ciphertext_b64, key24, iv8):
-    """解密 ``des3_cbc_encrypt`` 产出的 Base64 密文，返回文本。"""
+    """解密 ``des3_cbc_encrypt`` 产出的 Base64 密文，返回文本。
+
+    与 :func:`des3_cbc_encrypt` 对称，只接受 ``str``；字节密文请用
+    :func:`des3_cbc_decrypt_bytes`。
+    """
+    if not isinstance(ciphertext_b64, str):
+        raise TypeError("ciphertext_b64 必须是 str，字节数据请用 des3_cbc_decrypt_bytes")
     data = base64.b64decode(ciphertext_b64)
     return des3_cbc_decrypt_bytes(data, key24, iv8).decode("utf-8")
