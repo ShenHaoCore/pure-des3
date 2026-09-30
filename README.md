@@ -1,5 +1,7 @@
 # pure-des3
 
+[![Tests](https://github.com/ShenHaoCore/pure-des3/actions/workflows/tests.yml/badge.svg)](https://github.com/ShenHaoCore/pure-des3/actions/workflows/tests.yml)
+
 纯 Python 标准库实现的 DES 与 3DES（DES-EDE3-CBC），**零第三方依赖**。
 
 ## 为什么需要它
@@ -48,3 +50,12 @@ python -m unittest discover -s tests -v
 - DES 密钥的每一字节末位是奇偶校验位，会被 PC1 丢弃——翻转它不改变加密结果。
 - 明文长度正好是 8 的倍数时，PKCS#7 会补满一整个块（密文因此比明文长 8 字节）。
 - 密钥、IV、分组长度不符会立即抛 `ValueError`，不会静默截断。
+
+## 安全说明
+
+- **去填充是严格校验的**：除了检查末字节声明的填充长度是否落在合法区间，还要求末尾
+  `n` 个字节**全部**等于 `n`。只做前一步的实现（很常见）会静默接受大量畸形密文，
+  去填充后返回被截断的明文。
+- 任何解密失败都抛 `ValueError`，绝不返回半截或可疑的明文。
+- **3DES 已被弃用**：NIST 于 2023 年正式停止批准 3DES，其有效强度仅 112 位。本库的
+  用途是与既有的固定实现互操作；保护新数据请用 AES-GCM 或 ChaCha20-Poly1305。
