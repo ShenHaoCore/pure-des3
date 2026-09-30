@@ -138,6 +138,70 @@ class TestCbcApi(unittest.TestCase):
         self.assertEqual(pure_des3.des3_cbc_decrypt_bytes(cipher, self.KEY, self.IV), b"")
 
 
+class TestPkcs7Strictness(unittest.TestCase):
+    """去填充必须完整校验，不能只看末字节。"""
+
+    KEY = bytes.fromhex("0123456789abcdeffedcba9876543210aabbccddeeff0011")
+    IV = b"01234567"
+
+    def _raw_cbc_encrypt(self, data):
+        """对手工构造的分组序列做 CBC 加密，绕过上层填充逻辑。"""
+        previous = self.IV
+        out = b""
+        for offset in range(0, len(data), 8):
+            block = bytes(a ^ b for a, b in zip(data[offset:offset + 8], previous))
+            previous = pure_des3.des3_encrypt_block(block, self.KEY)
+            out += previous
+        return out
+
+    def test_consistent_padding_accepted(self):
+        for claimed in range(1, 9):
+            with self.subTest(claimed=claimed):
+                plain = b"A" * (8 - claimed) + bytes([claimed]) * claimed
+                cipher = self._raw_cbc_encrypt(plain)
+                self.assertEqual(
+                    pure_des3.des3_cbc_decrypt_bytes(cipher, self.KEY, self.IV), b"A" * (8 - claimed)
+                )
+
+    def test_inconsistent_padding_rejected(self):
+        """末字节声明补 2 字节，但只有最后一个字节是 0x02。"""
+        plain = b"AAAAAA" + b"\x00\x02"
+        cipher = self._raw_cbc_encrypt(plain)
+        with self.assertRaises(ValueError) as ctx:
+            pure_des3.des3_cbc_decrypt_bytes(cipher, self.KEY, self.IV)
+        self.assertIn("不全是", str(ctx.exception))
+
+    def test_padding_length_zero_rejected(self):
+        plain = b"AAAAAAA\x00"
+        with self.assertRaises(ValueError) as ctx:
+            pure_des3.des3_cbc_decrypt_bytes(self._raw_cbc_encrypt(plain), self.KEY, self.IV)
+        self.assertIn("超出", str(ctx.exception))
+
+    def test_padding_length_over_block_size_rejected(self):
+        plain = b"AAAAAAA\x10"
+        with self.assertRaises(ValueError):
+            pure_des3.des3_cbc_decrypt_bytes(self._raw_cbc_encrypt(plain), self.KEY, self.IV)
+
+    def test_full_block_padding_is_valid(self):
+        """整块填充（8 个 0x08）是合法的，不能误判。"""
+        plain = bytes([8]) * 8
+        cipher = self._raw_cbc_encrypt(plain)
+        self.assertEqual(pure_des3.des3_cbc_decrypt_bytes(cipher, self.KEY, self.IV), b"")
+
+    def test_tampered_last_block_is_detected(self):
+        """篡改密文末块：绝大多数情况下填充校验会拦下，绝不能静默返回垃圾。"""
+        cipher = bytearray(pure_des3.des3_cbc_encrypt_bytes(b"hello world", self.KEY, self.IV))
+        rejected = 0
+        for bit in range(8):
+            mutated = bytearray(cipher)
+            mutated[-1] ^= (1 << bit)
+            try:
+                pure_des3.des3_cbc_decrypt_bytes(bytes(mutated), self.KEY, self.IV)
+            except ValueError:
+                rejected += 1
+        self.assertGreaterEqual(rejected, 7, "8 个位翻转至少应拦下 7 个")
+
+
 class TestValidation(unittest.TestCase):
 
     KEY = bytes.fromhex("0123456789abcdeffedcba9876543210aabbccddeeff0011")

@@ -252,11 +252,24 @@ def _pkcs7_pad(data, block_size=_BLOCK_SIZE):
 
 
 def _pkcs7_unpad(data, block_size=_BLOCK_SIZE):
+    """去除 PKCS#7 填充，并完整校验填充的合法性。
+
+    校验分两步，缺一不可：
+
+    1. 末字节声明的填充长度必须落在 ``1..block_size`` 且不超过数据长度；
+    2. 末尾 ``padding`` 个字节必须**全部**等于 ``padding``。
+
+    只检查第 1 步（很多实现就这么写）会让大量畸形密文被静默接受，去填充后
+    得到截断的明文。第 2 步是判别填充正确性的唯一依据，也是抵御 padding
+    oracle 攻击的前提。
+    """
     if not data:
         raise ValueError("空数据无法去填充")
     padding = data[-1]
     if padding < 1 or padding > block_size or padding > len(data):
-        raise ValueError("PKCS#7 填充非法")
+        raise ValueError("PKCS#7 填充非法：长度字节 %d 超出 1..%d" % (padding, block_size))
+    if data[-padding:] != bytes([padding]) * padding:
+        raise ValueError("PKCS#7 填充非法：末尾 %d 字节不全是 0x%02X" % (padding, padding))
     return data[:-padding]
 
 
