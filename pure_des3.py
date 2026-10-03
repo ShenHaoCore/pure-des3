@@ -13,6 +13,8 @@
 ``des3_cbc_decrypt_bytes``    CBC + PKCS#7，字节进字节出
 ``des3_cbc_encrypt``          CBC + PKCS#7，文本进 Base64 出
 ``des3_cbc_decrypt``          CBC + PKCS#7，Base64 进文本出
+``des3_cbc_encrypt_with_random_iv``  随机 IV + CBC + Base64 出
+``des3_cbc_decrypt_with_random_iv``  随机 IV + CBC + Base64 进文本出
 ============================  ==================================================
 
 实现说明
@@ -31,10 +33,16 @@ DES 按 FIPS 46-3 完整实现：IP / FP / E / P / PC1 / PC2 置换表与 8 个 
 --------
 3DES 已被 NIST 于 2023 年正式弃用，有效强度仅 112 位，**不要**用它保护新数据。
 本模块的用途是与被固定实现 3DES 的既有系统互操作。
+
+CBC 的安全性要求：
+- 每次加密都必须使用全新的随机 IV；
+- 仅在受控、可信的上下文中使用此模块，不要把它当作认证加密方案；
+- 如需真实性和完整性，必须在应用层使用 HMAC 或 AEAD。
 """
 
 import base64
 import hmac
+import os
 
 __all__ = [
     "des_encrypt_block",
@@ -45,6 +53,8 @@ __all__ = [
     "des3_cbc_decrypt",
     "des3_cbc_encrypt_bytes",
     "des3_cbc_decrypt_bytes",
+    "des3_cbc_encrypt_with_random_iv",
+    "des3_cbc_decrypt_with_random_iv",
 ]
 
 _BLOCK_SIZE = 8
@@ -186,7 +196,7 @@ def _crypt_block(block8, subkeys):
 
 def _require_length(name, value, expected):
     if len(value) != expected:
-        raise ValueError("%s 必须为 %d 字节，实际 %d 字节" % (name, expected, len(value)))
+        raise ValueError("%s 长度非法" % name)
 
 
 def _require_block(block8):
@@ -203,6 +213,14 @@ def _require_des3_key(key24):
 
 def _require_iv(iv8):
     _require_length("IV", iv8, _BLOCK_SIZE)
+
+
+def _zeroize(data):
+    """尽力清零可变字节容器，降低明文/密钥残留风险。"""
+    if isinstance(data, bytearray):
+        data[:] = b"\x00" * len(data)
+    elif isinstance(data, memoryview):
+        data.cast("B")[:] = b"\x00" * len(data)
 
 
 # ---------------------------------------------------------------------------
@@ -287,11 +305,15 @@ def des3_cbc_encrypt_bytes(data, key24, iv8):
     padded = _pkcs7_pad(data)
     previous = iv8
     chunks = []
-    for offset in range(0, len(padded), _BLOCK_SIZE):
-        block = bytes(a ^ b for a, b in zip(padded[offset:offset + _BLOCK_SIZE], previous))
-        previous = des3_encrypt_block(block, key24)
-        chunks.append(previous)
-    return b"".join(chunks)
+    try:
+        for offset in range(0, len(padded), _BLOCK_SIZE):
+            block = bytes(a ^ b for a, b in zip(padded[offset:offset + _BLOCK_SIZE], previous))
+            previous = des3_encrypt_block(block, key24)
+            chunks.append(previous)
+        return b"".join(chunks)
+    finally:
+        # 只做尽力清零：用于临时字节序列和 IV 值。
+        _zeroize(bytearray(previous))
 
 
 def des3_cbc_decrypt_bytes(data, key24, iv8):
@@ -302,12 +324,15 @@ def des3_cbc_decrypt_bytes(data, key24, iv8):
         raise ValueError("密文长度必须是 %d 的整数倍" % _BLOCK_SIZE)
     previous = iv8
     chunks = []
-    for offset in range(0, len(data), _BLOCK_SIZE):
-        block = data[offset:offset + _BLOCK_SIZE]
-        plain = des3_decrypt_block(block, key24)
-        chunks.append(bytes(a ^ b for a, b in zip(plain, previous)))
-        previous = block
-    return _pkcs7_unpad(b"".join(chunks))
+    try:
+        for offset in range(0, len(data), _BLOCK_SIZE):
+            block = data[offset:offset + _BLOCK_SIZE]
+            plain = des3_decrypt_block(block, key24)
+            chunks.append(bytes(a ^ b for a, b in zip(plain, previous)))
+            previous = block
+        return _pkcs7_unpad(b"".join(chunks))
+    finally:
+        _zeroize(bytearray(previous))
 
 
 def des3_cbc_encrypt(plaintext, key24, iv8):
@@ -320,6 +345,16 @@ def des3_cbc_encrypt(plaintext, key24, iv8):
     return base64.b64encode(des3_cbc_encrypt_bytes(plaintext.encode("utf-8"), key24, iv8)).decode("ascii")
 
 
+def des3_cbc_encrypt_with_random_iv(plaintext, key24):
+    """随机生成 IV 并返回 ``IV || 密文`` 的 Base64 字符串。"""
+    if not isinstance(plaintext, str):
+        raise TypeError("plaintext 必须是 str，字节数据请用 des3_cbc_encrypt_bytes")
+    _require_des3_key(key24)
+    iv8 = os.urandom(_BLOCK_SIZE)
+    ciphertext = des3_cbc_encrypt_bytes(plaintext.encode("utf-8"), key24, iv8)
+    return base64.b64encode(iv8 + ciphertext).decode("ascii")
+
+
 def des3_cbc_decrypt(ciphertext_b64, key24, iv8):
     """解密 ``des3_cbc_encrypt`` 产出的 Base64 密文，返回文本。
 
@@ -328,5 +363,29 @@ def des3_cbc_decrypt(ciphertext_b64, key24, iv8):
     """
     if not isinstance(ciphertext_b64, str):
         raise TypeError("ciphertext_b64 必须是 str，字节数据请用 des3_cbc_decrypt_bytes")
-    data = base64.b64decode(ciphertext_b64, validate=True)
-    return des3_cbc_decrypt_bytes(data, key24, iv8).decode("utf-8")
+    try:
+        data = base64.b64decode(ciphertext_b64, validate=True)
+    except ValueError as exc:
+        raise ValueError("Base64 密文格式非法") from exc
+    try:
+        return des3_cbc_decrypt_bytes(data, key24, iv8).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("解密失败或明文不是有效 UTF-8") from exc
+
+
+def des3_cbc_decrypt_with_random_iv(ciphertext_b64, key24):
+    """解密 ``des3_cbc_encrypt_with_random_iv`` 产出的 Base64 结果。"""
+    if not isinstance(ciphertext_b64, str):
+        raise TypeError("ciphertext_b64 必须是 str，字节数据请用 des3_cbc_decrypt_bytes")
+    try:
+        data = base64.b64decode(ciphertext_b64, validate=True)
+    except ValueError as exc:
+        raise ValueError("Base64 密文格式非法") from exc
+    if len(data) < _BLOCK_SIZE or len(data) % _BLOCK_SIZE:
+        raise ValueError("随机 IV + 密文的长度非法")
+    iv8 = data[:_BLOCK_SIZE]
+    ciphertext = data[_BLOCK_SIZE:]
+    try:
+        return des3_cbc_decrypt_bytes(ciphertext, key24, iv8).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("解密失败或明文不是有效 UTF-8") from exc
