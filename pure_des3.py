@@ -34,6 +34,7 @@ DES 按 FIPS 46-3 完整实现：IP / FP / E / P / PC1 / PC2 置换表与 8 个 
 """
 
 import base64
+import hmac
 
 __all__ = [
     "des_encrypt_block",
@@ -268,7 +269,8 @@ def _pkcs7_unpad(data, block_size=_BLOCK_SIZE):
     padding = data[-1]
     if padding < 1 or padding > block_size or padding > len(data):
         raise ValueError("PKCS#7 填充非法：长度字节 %d 超出 1..%d" % (padding, block_size))
-    if data[-padding:] != bytes([padding]) * padding:
+    tail = data[-padding:]
+    if not hmac.compare_digest(tail, bytes([padding]) * padding):
         raise ValueError("PKCS#7 填充非法：末尾 %d 字节不全是 0x%02X" % (padding, padding))
     return data[:-padding]
 
@@ -326,5 +328,5 @@ def des3_cbc_decrypt(ciphertext_b64, key24, iv8):
     """
     if not isinstance(ciphertext_b64, str):
         raise TypeError("ciphertext_b64 必须是 str，字节数据请用 des3_cbc_decrypt_bytes")
-    data = base64.b64decode(ciphertext_b64)
+    data = base64.b64decode(ciphertext_b64, validate=True)
     return des3_cbc_decrypt_bytes(data, key24, iv8).decode("utf-8")
